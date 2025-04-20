@@ -1,0 +1,21 @@
+# 排除虚拟环境与生成文件
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 排除IDE配置文件
+.vscode/
+.idea/
+
+# 排除大型数据文件
+outputs/figures/*.pdf          # 若需保留可注释掉
+outputs/animations/*.gif
+
+# 忽略生成的图片和本地测试配置
+outputs/
+config/figures/*.yaml   # 不提交具体示意图配置
+
+# 但保留示例配置模板
+!config/figures/example_*.yaml
