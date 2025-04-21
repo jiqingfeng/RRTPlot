@@ -3,8 +3,7 @@ import numpy as np
 from matplotlib.patches import Circle, Rectangle, Polygon
 from matplotlib.text import Annotation
 
-class RRTPlotter:
-    
+class RRTPlotter:    
     def __init__(self, figsize=(10, 8), dpi=100, boundary_view=True):
         self.fig, self.ax = plt.subplots(figsize=figsize, dpi=dpi)
         self.ax.set_aspect('equal')
@@ -22,7 +21,57 @@ class RRTPlotter:
         self._obstacle_num = 0 # 初始化obstacle_num为0
         self._node_num = 0 # 初始化node_num为0
 
+        self.stype = RRTStyleConfig() # 初始化stype为RRTStyleConfig()
 
+    ##############################################
+    # 第一层：基础绘制层（返回原生matplotlib对象）
+    ##############################################
+    def draw_base_circle(self, center, **kwargs) -> Circle:
+        """基础圆形绘制（无标签）"""
+        params = {**self.style.node, **kwargs}
+        circle = Circle(center, radius=params['radius'], 
+                       color=params['color'], alpha=params['alpha'])
+        self.ax.add_patch(circle)
+        return circle
+    
+    def _draw_base_arrow(self, start, end, **kwargs) -> Annotation:
+        """基础箭头绘制（无标签）"""
+        params = {**self.style.arrow, **kwargs}
+        return self.ax.annotate(
+            '', xy=end, xytext=start,
+            arrowprops=dict(
+                arrowstyle=params['arrow_style'],
+                color=params['color'],
+                lw=params['linewidth']
+            )
+        )
+    
+    def _draw_base_obstacle(self, vertices, **kwargs) -> Polygon:
+        """基础障碍物绘制"""
+        params = {**self.style.obstacle, **kwargs}
+        
+        if not np.allclose(vertices[0], vertices[-1]): # 确保路径闭合
+            vertices = np.vstack([vertices, vertices[0]])
+        
+        obstacle = Polygon(vertices, closed=True, 
+                          color=params['color'], alpha=params['alpoha'])
+        return obstacle
+
+    ##############################################
+    # 第二层：组合元素层（基础元素+标签）
+    ##############################################
+    def add_circle(self, center, label=None, **kwargs) -> tuple[Circle, Annotation]:
+        """带标签的圆形节点"""
+        circle = self.draw_base_circle(center, **kwargs)
+        text = None
+        if label is not None:
+            text = self.ax.text(
+                center[0], center[1]+circle.radius*1.2,
+                str(label),
+                **self.style.node['fontdict']
+            )
+        return circle, text
+    
     def add_circle(self, center, radius=0.2, color='blue', alpha=1.0, label=None, fontdict={}, **kwargs):
         """绘制实心圆点（支持标签自动避让）"""
         circle = Circle(center, radius=radius, color=color, alpha=alpha)
@@ -166,3 +215,45 @@ class RRTPlotter:
             'arrow_style': '-|>'
         }
     }
+
+
+class RRTStyleConfig:
+    """全局绘图样式配置类"""
+    def __init__(self):
+        # 节点默认样式
+        self.node = {
+            'color': 'blue',
+            'radius': 0.2,
+            'alpha': 1.0,
+            'fontdict': {}
+        }
+        
+        # 箭头默认样式
+        self.arrow = {
+            'color': 'black',
+            'linewidth': 1.5,
+            'arrow_style': '-|>',
+            'label_offset': 0.2,
+            'fontdict': {}
+        }
+        
+        # 障碍物默认样式
+        self.obstacle = {
+            'color': 'black',
+            'alpha': 0.6
+        }
+        
+        # 标注默认样式
+        self.annotation = {
+            'color': 'red',
+            'fontsize': 12,
+            'box_style': None,
+            'fontdict': {}
+        }
+
+    def update_style(self, element_type: str, **kwargs):
+        """更新指定元素的全局样式"""
+        if hasattr(self, element_type):
+            getattr(self, element_type).update(kwargs)
+        else:
+            raise ValueError(f"未知的元素类型: {element_type}")
