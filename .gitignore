@@ -22,3 +22,14 @@ config/figures/*.yaml   # 不提交具体示意图配置
 
 # 排除测试目录
 test/
+
+# 新增忽略项
+*.egg-info/
+build/
+dist/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# 排除笔记
+notes/
