@@ -46,8 +46,8 @@ class RRTStyleConfig:
         self.angle = {
             'color': '#e67e22',
             'linewidth': 1.2,
-            'arc_radius': 1.5,
-            'label_offset': 0.8,
+            'arc_radius': 0.5,
+            'label_offset': 1.2,
             'arrowprops': {
                 'arrowstyle': '->',
                 'connectionstyle': 'arc3,rad=0.2',
@@ -59,6 +59,14 @@ class RRTStyleConfig:
                 'fontweight': 'bold',
                 'fontfamily': 'Times New Roman'
             }
+        }
+
+        # 辅助线样式
+        self.guideline = {
+            'color': '#999999',
+            'linewidth': 5.0,
+            'linestyle': '--',
+            'alpha': 0.6
         }
 
     def update_style(self, element_type: str, **kwargs):
@@ -145,6 +153,21 @@ class RRTPlotter:
         obstacle = Polygon(vertices, closed=True, **params)
         self.ax.add_patch(obstacle)
         return obstacle
+    
+    # 在RRTPlotter类中添加基础线绘制方法
+    @validate_params(['color', 'linewidth', 'linestyle', 'alpha'])
+    def add_line(self,
+                start: Tuple[float, float],
+                end: Tuple[float, float],
+                **kwargs) -> plt.Line2D:
+        """绘制基础线段"""
+        params = {**self.style.guideline, **kwargs}
+        line = self.ax.add_line(plt.Line2D(
+                    [start[0], end[0]], 
+                    [start[1], end[1]],
+                    **{k: v for k, v in params.items() if k in ['color', 'linewidth', 'linestyle', 'alpha']}
+                ))
+        return line
 
     ##############################################
     # 第二层：组合元素（基础元素+标签）
@@ -294,8 +317,7 @@ class RRTPlotter:
             segment_end[0] + radius * np.cos(angle),
             segment_end[1] + radius * np.sin(angle)
         )
-        
-        
+
         # 绘制箭头
         arrow, arrow_text = self.add_edge(start, segment_end, **kwargs)
         
@@ -348,75 +370,59 @@ class RRTPlotter:
         # 合并样式参数
         style_params = {**self.style.angle, **kwargs}
         
-        # 获取边坐标
-        def get_edge_coords(edge):
-            return np.array([edge.xyann, edge.xy])
+        # 获取线段空间关系
+        intersection, (dist1, dist2), angle_diff = self.calculate_segment_relations(edge1, edge2)
         
-        line1 = get_edge_coords(edge1)
-        line2 = get_edge_coords(edge2)
-
-        # 计算原始交点
-        intersect_point, need_extension = self._find_intersection(line1, line2)
-        # need_extension = False
+        # 情况1：直线无交点（平行或重合）
+        if intersection is None:
+            return None
         
-        # 情况1：存在直接交点
-        if intersect_point is not None:
-            # 检查交点两侧长度
-            d1_before = np.linalg.norm(line1[0] - intersect_point)
-            d1_after = np.linalg.norm(line1[1] - intersect_point)
-            d2_before = np.linalg.norm(line2[0] - intersect_point)
-            d2_after = np.linalg.norm(line2[1] - intersect_point)
-            
-            if min(d1_before, d1_after, d2_before, d2_after) < style_params['arc_radius']:
-                need_extension = True
-        else:
-            need_extension = True
-
-        # 情况2：需要延长处理
-        if need_extension:
-            # 延长第一条边
-
-            extended_line1 = self._extend_line(line1, extension_length)
-            intersect_point = self._find_intersection(extended_line1, line2)
-            
-            # 绘制延长线
-            extend_arrow, _ = self.add_edge(
-                line1[1], extended_line1[1],
-                linestyle='--',
-                alpha=0.3,
-                color=style_params['color']
-            )
-        else:
-            extend_arrow = None
-
-        # 计算角度参数
-        v1 = line1[1] - line1[0] if not need_extension else extended_line1[1] - line1[0]
-        v2 = line2[1] - line2[0]
+        # 情况2：需要处理线段延长
+        line1_orig = np.array([edge1.xyann, edge1.xy])
+        line2_orig = np.array([edge2.xyann, edge2.xy])
         
-        angle, angle_deg, is_acute = self._calculate_angle(v1, v2)
+
+        # 处理第一条线段的延长
+        line1_ext, extend_arrow1 = self._extend_to_intersection(
+            line1_orig, dist1, intersection,
+            style_params['arc_radius']*1.5, 
+            style_params
+        )
         
+        # 处理第二条线段的延长
+        line2_ext, extend_arrow2 = self._extend_to_intersection(
+            line2_orig, dist2, intersection,
+            style_params['arc_radius']*1.5, 
+            style_params
+        )
+        
+        # 获取延长后的向量
+        v1 = line1_ext[1] - line1_ext[0]
+        v2 = line2_ext[1] - line2_ext[0]
+        
+        # 计算标注角度参数
+        (start_angle, end_angle), angle_rad, is_acute = self._calculate_angle(v1, v2)
+        
+
         # 确定标注位置
         arc_radius = style_params['arc_radius']
-
-        label_pos_radius =  (arc_radius * style_params['label_offset'])
-        label_pos_direction = self._get_label_offset(v1, v2)
-
-        label_pos = (intersect_point[0][0] + label_pos_radius * label_pos_direction[0],
-                     intersect_point[0][1] + label_pos_radius * label_pos_direction[1])
-        a = intersect_point[0][0]
-        b = intersect_point[0][1]
-        arc_center = (a,b)
+        label_pos = self._calculate_label_position(
+            intersection, 
+            v1, v2, 
+            arc_radius * style_params['label_offset']
+        )
+        
         # 绘制圆弧
-        arc = Arc(arc_center, 
+        arc = Arc(intersection, 
                 2*arc_radius, 2*arc_radius,
-                theta1=np.degrees(angle[0]), 
-                theta2=np.degrees(angle[1]),
+                theta1=np.degrees(start_angle), 
+                theta2=np.degrees(end_angle),
                 color=style_params['color'],
                 linewidth=style_params['linewidth'])
         self.ax.add_patch(arc)
-
+        
         # 添加标注文本
-        label_text = label if label else f"{angle_deg:.1f}°"
+        label_text = label if label else f"{abs(np.rad2deg(angle_rad)):.1f}°"
         text = self.ax.annotate(
             label_text,
             xy=label_pos,
@@ -424,14 +430,13 @@ class RRTPlotter:
             **style_params['fontdict'],
             arrowprops=style_params['arrowprops'] if is_acute else None
         )
-
+        
         return {
             'arc': arc,
             'text': text,
-            'extend_arrow': extend_arrow,
-            'intersection_point': intersect_point
+            'extend_arrows': [extend_arrow1, extend_arrow2],
+            'intersection': intersection
         }
-
 
     ##############################################
     # 工具方法
@@ -448,9 +453,6 @@ class RRTPlotter:
             fontsize=params['fontsize'],
             **params['fontdict']
         )
-    
-
-
     def show(self):
         """显示绘图"""
         plt.show()
@@ -459,77 +461,162 @@ class RRTPlotter:
         """保存图像"""
         self.fig.savefig(filename, bbox_inches='tight', dpi=dpi)
 
-    # 几何计算辅助方法
-    def _find_intersection(self, line1, line2):
+    # 几何计算辅助方法.
+
+    def _extend_to_intersection(self, 
+                            original_line: np.ndarray,
+                            signed_dist: float, 
+                            intersection: np.ndarray,
+                            min_radius: float,
+                            style: dict) -> Tuple[np.ndarray, Optional[Annotation]]:
         """
-        计算两条线段的交点及是否实际相交
-        :return: (交点坐标, 是否实际相交)
+        根据符号距离延长线段
+        返回：(延长后的线段, 延长线箭头对象)
         """
-        # 将输入转换为numpy数组
-        p1, p2 = np.array(line1)
-        p3, p4 = np.array(line2)
+        start, end = original_line[0], original_line[1]
+        direction = end - start
+        
+        # 情况1：交点在线段内部
+        if signed_dist == 0:
+            # 检查终点到交点的剩余长度
+            remaining_length = np.linalg.norm(end - intersection)
+            if remaining_length < min_radius:
+                new_end = end + direction / np.linalg.norm(direction) * (min_radius - remaining_length)
+                arrow = self._draw_extension(end, new_end, style)
+                return np.array([start, new_end]), arrow
+            return original_line, None
+        
+        # 情况2：需要反向延长（起点之前）
+        if signed_dist < 0:
+            extend_length = abs(signed_dist) + min_radius
+            new_start = start - direction / np.linalg.norm(direction) * extend_length
+            arrow = self._draw_extension(start, new_start, style)
+            return np.array([new_start, end]), arrow
+        
+        # 情况3：需要正向延长（终点之后）
+        extend_length = signed_dist + min_radius
+        new_end = end + direction / np.linalg.norm(direction) * extend_length
+        arrow = self._draw_extension(end, new_end, style)
+        return np.array([start, new_end]), arrow
 
-        # 计算分母项
-        denominator = (p4[1]-p3[1])*(p2[0]-p1[0]) - (p4[0]-p3[0])*(p2[1]-p1[1])
+    # 修改_extend_to_intersection中的绘图调用
+    def _draw_extension(self, start: np.ndarray, end: np.ndarray, style: dict) -> plt.Line2D:
+        """绘制延长线（使用基础线段）"""
+        return self.add_line(
+            tuple(start), tuple(end),
+            color=style.get('color', self.style.guideline['color']),
+            linewidth=style.get('linewidth', self.style.guideline['linewidth']),
+            linestyle=style.get('linestyle', self.style.guideline['linestyle']),
+            alpha=style.get('alpha', self.style.guideline['alpha'])
+        )
 
-        # 处理平行情况
-        if np.isclose(denominator, 0):
-            # 检查是否共线
-            if np.allclose(np.cross(p3-p1, p2-p1), 0):
-                # 在共线时返回第一个交点（如果有）
-                t_values = []
-                for p in [p3, p4]:
-                    t = (p[0]-p1[0])/(p2[0]-p1[0]) if not np.isclose(p2[0], p1[0]) else \
-                        (p[1]-p1[1])/(p2[1]-p1[1])
-                    if 0 <= t <= 1:
-                        t_values.append(t)
-                if t_values:
-                    t = np.mean(t_values)
-                    intersect = p1 + t*(p2-p1)
-                    return tuple(intersect), True
-            # 完全平行不相交
-            return None, False
+    def _calculate_label_position(self, 
+                                center: Tuple[float, float],
+                                v1: np.ndarray, 
+                                v2: np.ndarray,
+                                offset: float) -> Tuple[float, float]:
+        """计算标签位置"""
+        # 计算夹角平分线方向
+        angle1 = np.arctan2(v1[1], v1[0])
+        angle2 = np.arctan2(v2[1], v2[0])
+        bisect_angle = (angle1 + angle2) / 2
+        
+        # 添加垂直于平分线的偏移
+        dx = offset * np.cos(bisect_angle)
+        dy = offset * np.sin(bisect_angle)
+        
+        return (center[0] + dx, center[1] + dy)
+    
+    def calculate_segment_relations(self, edge1: Annotation, edge2: Annotation) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]], float]:
+        """
+        计算两个有向线段的空间关系和角度差
+        返回：(交点坐标， (线段1距离, 线段2距离)，旋转角度)
+        """
+        # 获取线段坐标
+        line1 = np.array([edge1.xyann, edge1.xy])
+        line2 = np.array([edge2.xyann, edge2.xy])
 
-        # 计算参数t和u
-        numerator_t = (p4[0]-p3[0])*(p1[1]-p3[1]) - (p4[1]-p3[1])*(p1[0]-p3[0])
-        numerator_u = (p2[0]-p1[0])*(p1[1]-p3[1]) - (p2[1]-p1[1])*(p1[0]-p3[0])
-        t = numerator_t / denominator
-        u = numerator_u / denominator
+        # 计算直线交点
+        intersection = self._line_intersection(line1, line2)
+        
+        # 计算距离参数
+        dist_params = (None, None)
+        if intersection:
+            dist_params = (
+                self._calculate_signed_distance(line1, intersection),
+                self._calculate_signed_distance(line2, intersection)
+            )
 
-        # 计算交点坐标
-        intersect = p1 + t*(p2 - p1)
+        # 计算有向角度差
+        angle_diff = self._calculate_angle_diff(
+            self._get_direction_vector(line1),
+            self._get_direction_vector(line2)
+        )
+        
+        return intersection, dist_params, angle_diff
 
-        # 判断是否在线段范围内
-        is_intersecting = (0 <= t <= 1) and (0 <= u <= 1)
+    def _calculate_signed_distance(self, line: np.ndarray, point: Tuple[float, float]) -> float:
+        """
+        计算点到线段的符号距离
+        返回：负值-起点前，0-线段内，正值-终点后
+        """
+        start, end = line[0], line[1]
+        vec_line = end - start
+        vec_point = np.array(point) - start
+        
+        # 计算投影参数t
+        t = np.dot(vec_point, vec_line) / np.dot(vec_line, vec_line)
+        
+        if t < 0:
+            # 起点之前的距离（返回负值）
+            return -np.linalg.norm(vec_point)
+        elif t > 1:
+            # 终点之后的距离（返回正值）
+            return np.linalg.norm(np.array(point) - end)
+        else:
+            # 在线段内部
+            return 0.0
 
-        return (float(intersect[0]), float(intersect[1])), is_intersecting
+    def _line_intersection(self, line1: np.ndarray, line2: np.ndarray) -> Optional[Tuple[float, float]]:
+        """计算无限长直线的交点"""
+        # 解线性方程组 [p + t*u = q + s*v]
+        p, u = line1[0], line1[1] - line1[0]
+        q, v = line2[0], line2[1] - line2[0]
+        
+        cross_uv = np.cross(u, v)
+        if np.isclose(cross_uv, 0):
+            return None  # 平行或重合
+        
+        w = q - p
+        t = np.cross(w, v) / cross_uv
+        return tuple(p + t * u)
 
+    def _get_direction_vector(self, line: np.ndarray) -> np.ndarray:
+        """获取线段方向向量"""
+        return line[1] - line[0]
 
-    def _extend_line(self, line, length):
-        """按方向延长线段"""
-        direction = line[1] - line[0]
-        unit_vector = direction / np.linalg.norm(direction)
-        new_end = line[1] + unit_vector * length
-        return np.array([line[0], new_end])
-
+    def _calculate_angle_diff(self, v1: np.ndarray, v2: np.ndarray) -> float:
+        """计算有向角度差"""
+        angle1 = np.arctan2(v1[1], v1[0])
+        angle2 = np.arctan2(v2[1], v2[0])
+        angle_diff = (angle2 - angle1 + np.pi) % (2 * np.pi) - np.pi
+        return angle_diff
     def _calculate_angle(self, v1, v2):
-        """计算转向角度"""
+        """计算转向角度（返回弧度值）"""
+        # 计算原始角度差并规范化到(-π, π]
         angle_v1 = np.arctan2(v1[1], v1[0])
         angle_v2 = np.arctan2(v2[1], v2[0])
-        angle = angle_v2 - angle_v1
-        angle_deg = np.degrees(angle) % 360
-        
-        # 确定绘制方向
-        if angle_deg > 180:
-            start_angle = angle_v1
-            end_angle = angle_v2
-            is_acute = False
-        else:
-            start_angle = angle_v2
-            end_angle = angle_v1
-            is_acute = True
-        
-        return (start_angle, end_angle), angle_deg, is_acute
+        angle_diff = (angle_v2 - angle_v1 + np.pi) % (2 * np.pi) - np.pi
+
+        start_angle = angle_v1
+        end_angle = angle_v2
+        is_acute = angle_diff > 0
+
+        # 圆弧的绘制规则为从start_angle逆时针到end_angle
+        # 确保圆弧的绘制方向与角度差一致
+        if angle_diff < 0:
+            start_angle, end_angle = end_angle, start_angle        
+        return (start_angle, end_angle), angle_diff, is_acute
 
     def _get_label_offset(self, v1, v2):
         """计算标签偏移方向"""
